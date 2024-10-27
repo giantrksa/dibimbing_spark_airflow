@@ -1,20 +1,23 @@
 include .env
 
+# Export all variables from .env to the environment
+export $(shell sed 's/=.*//' .env)
+
 help:
 	@echo "## docker-build			- Build Docker Images (amd64) including its inter-container network."
 	@echo "## docker-build-arm		- Build Docker Images (arm64) including its inter-container network."
-	@echo "## postgres			- Run a Postgres container  "
-	@echo "## spark			- Run a Spark cluster, rebuild the postgres container, then create the destination tables "
-	@echo "## jupyter			- Spinup jupyter notebook for testing and validation purposes."
-	@echo "## airflow			- Spinup airflow scheduler and webserver."
-	@echo "## kafka			- Spinup kafka cluster (Kafka+Zookeeper)."
-	@echo "## datahub			- Spinup datahub instances."
-	@echo "## metabase			- Spinup metabase instance."
+	@echo "## postgres			- Run a Postgres container."
+	@echo "## spark			- Run a Spark cluster, rebuild the postgres container, then create the destination tables."
+	@echo "## jupyter			- Spin up Jupyter notebook for testing and validation purposes."
+	@echo "## airflow			- Spin up Airflow scheduler and webserver."
+	@echo "## kafka			- Spin up Kafka cluster (Kafka+Zookeeper)."
+	@echo "## datahub			- Spin up Datahub instances."
+	@echo "## metabase			- Spin up Metabase instance."
 	@echo "## clean			- Cleanup all running containers related to the challenge."
 
 docker-build-slim:
-	@chmod 777 logs/
-	@chmod 777 notebooks/
+	@chmod 755 logs/
+	@chmod 755 notebooks/
 	@docker network inspect dataeng-network >/dev/null 2>&1 || docker network create dataeng-network
 	@docker build -t dataeng-dibimbing/jupyter -f ./docker/Dockerfile.jupyter .
 
@@ -22,8 +25,8 @@ docker-build:
 	@echo '__________________________________________________________'
 	@echo 'Building Docker Images ...'
 	@echo '__________________________________________________________'
-	@chmod 777 logs/
-	@chmod 777 notebooks/
+	@chmod 755 logs/
+	@chmod 755 notebooks/
 	@docker network inspect dataeng-network >/dev/null 2>&1 || docker network create dataeng-network
 	@echo '__________________________________________________________'
 	@docker build -t dataeng-dibimbing/spark -f ./docker/Dockerfile.spark .
@@ -50,7 +53,7 @@ jupyter:
 	@echo '__________________________________________________________'
 	@echo 'Creating Jupyter Notebook Cluster at http://localhost:${JUPYTER_PORT} ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-jupyter.yml --env-file .env up -d
+	@docker-compose -f ./docker/docker-compose-jupyter.yml --env-file .env up -d
 	@echo 'Created...'
 	@echo 'Processing token...'
 	@sleep 20
@@ -61,7 +64,7 @@ spark:
 	@echo '__________________________________________________________'
 	@echo 'Creating Spark Cluster ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-spark.yml --env-file .env up -d
+	@docker-compose -f ./docker/docker-compose-spark.yml --env-file .env up -d
 	@echo '==========================================================='
 
 spark-submit-test:
@@ -82,13 +85,13 @@ airflow:
 	@echo '__________________________________________________________'
 	@echo 'Creating Airflow Instance ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-airflow.yml --env-file .env up
+	@docker-compose -f ./docker/docker-compose-airflow.yml --env-file .env up -d --remove-orphans
 	@echo '==========================================================='
 
 postgres: postgres-create postgres-create-warehouse postgres-create-table postgres-ingest-csv
 
 postgres-create:
-	@docker compose -f ./docker/docker-compose-postgres.yml --env-file .env up -d
+	@docker-compose -f ./docker/docker-compose-postgres.yml --env-file .env up -d
 	@echo '__________________________________________________________'
 	@echo 'Postgres container created at port ${POSTGRES_PORT}...'
 	@echo '__________________________________________________________'
@@ -103,21 +106,21 @@ postgres-create-table:
 	@echo '__________________________________________________________'
 	@echo 'Creating tables...'
 	@echo '_________________________________________'
-	@docker exec -it ${POSTGRES_CONTAINER_NAME} psql -U ${POSTGRES_USER} -d ${POSTGRES_DW_DB} -f sql/ddl-retail.sql
+	@docker exec ${POSTGRES_CONTAINER_NAME} psql -U ${POSTGRES_USER} -d ${POSTGRES_DW_DB} -f sql/ddl-retail.sql
 	@echo '==========================================================='
 
 postgres-ingest-csv:
 	@echo '__________________________________________________________'
 	@echo 'Ingesting CSV...'
 	@echo '_________________________________________'
-	@docker exec -it ${POSTGRES_CONTAINER_NAME} psql -U ${POSTGRES_USER} -d ${POSTGRES_DW_DB} -f sql/ingest-retail.sql
+	@docker exec ${POSTGRES_CONTAINER_NAME} psql -U ${POSTGRES_USER} -d ${POSTGRES_DW_DB} -f sql/ingest-retail.sql
 	@echo '==========================================================='
 
 postgres-create-warehouse:
 	@echo '__________________________________________________________'
 	@echo 'Creating Warehouse DB...'
 	@echo '_________________________________________'
-	@docker exec -it ${POSTGRES_CONTAINER_NAME} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -f sql/warehouse-ddl.sql
+	@docker exec ${POSTGRES_CONTAINER_NAME} psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -f sql/warehouse-ddl.sql
 	@echo '==========================================================='
 
 kafka: kafka-create
@@ -126,7 +129,7 @@ kafka-create:
 	@echo '__________________________________________________________'
 	@echo 'Creating Kafka Cluster ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-kafka.yml --env-file .env up -d
+	@docker-compose -f ./docker/docker-compose-kafka.yml --env-file .env up -d
 	@echo 'Waiting for uptime on http://localhost:8083 ...'
 	@sleep 20
 	@echo '==========================================================='
@@ -167,7 +170,7 @@ datahub-create:
 	@echo '__________________________________________________________'
 	@echo 'Creating Datahub Instance ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-datahub.yml --env-file .env up
+	@docker-compose -f ./docker/docker-compose-datahub.yml --env-file .env up -d
 	@echo '==========================================================='
 
 datahub-ingest:
@@ -181,12 +184,14 @@ metabase: postgres-create-warehouse
 	@echo '__________________________________________________________'
 	@echo 'Creating Metabase Instance ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-metabase.yml --env-file .env up
+	@docker-compose -f ./docker/docker-compose-metabase.yml --env-file .env up -d
 	@echo '==========================================================='
 
 clean:
 	@bash ./scripts/goodnight.sh
 
-
 postgres-bash:
 	@docker exec -it dataeng-postgres bash
+
+postgres-sql:
+	@docker exec -it ${POSTGRES_CONTAINER_NAME} psql -U ${POSTGRES_USER} -d ${POSTGRES_DW_DB}
