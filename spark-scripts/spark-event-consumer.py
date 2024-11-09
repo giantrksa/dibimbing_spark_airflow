@@ -1,82 +1,73 @@
-import pyspark
-import os
-from dotenv import load_dotenv
-from pathlib import Path
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
 
-from pyspark.sql.functions import from_json, col, avg
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType
-
-dotenv_path = Path("/opt/app/.env")
-load_dotenv(dotenv_path=dotenv_path)
-
-spark_hostname = os.getenv("SPARK_MASTER_HOST_NAME")
-spark_port = os.getenv("SPARK_MASTER_PORT")
-kafka_host = os.getenv("KAFKA_HOST")
-kafka_topic = os.getenv("KAFKA_TOPIC_NAME")
-
-spark_host = f"spark://{spark_hostname}:{spark_port}"
-
-os.environ["PYSPARK_SUBMIT_ARGS"] = (
-    "--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2 org.postgresql:postgresql:42.2.18"
-)
-
-spark = (
-    pyspark.sql.SparkSession.builder.appName("DibimbingStreaming")
-    .master(spark_host)
-    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0")
-    .config("spark.sql.shuffle.partitions", 4)
-    .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", True)
+# Create Spark Session
+spark = SparkSession \
+    .builder \
+    .appName("PurchaseStreamProcessor") \
     .getOrCreate()
-)
 
-spark.sparkContext.setLogLevel("WARN")
+# Define schema for purchase events
+schema = StructType([
+    StructField("timestamp", StringType(), True),
+    StructField("user_id", IntegerType(), True),
+    StructField("product_id", IntegerType(), True),
+    StructField("quantity", IntegerType(), True),
+    StructField("price", DoubleType(), True)
+])
 
-schema = StructType(
-    [
-        StructField("order_id", StringType(), True),
-        StructField("customer_id", IntegerType(), True),
-        StructField("furniture", StringType(), True),
-        StructField("color", StringType(), True),
-        StructField("price", IntegerType(), True),
-        StructField("ts", LongType(), True),
-    ]
-)
+def process_stream():
+    # Read from Kafka
+    df = spark \
+        .readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "dataeng-kafka:9092") \
+        .option("subscribe", "purchase_events") \
+        .option("startingOffsets", "earliest") \
+        .load()
 
-stream_df = (
-    spark.readStream.format("kafka")
-    .option("kafka.bootstrap.servers", f"{kafka_host}:9092")
-    .option("subscribe", kafka_topic)
-    .option("startingOffsets", "latest")
-    .load()
-)
+    # Parse JSON from Kafka
+    parsed_df = df.select(
+        from_json(col("value").cast("string"), schema).alias("data")
+    ).select("data.*")
 
-parsed_df = stream_df.selectExpr("CAST(value AS STRING)").select(from_json(col("value"), schema).alias("data")).select("data.*")
+    # Convert timestamp string to timestamp type
+    parsed_df = parsed_df.withColumn(
+        "event_timestamp", 
+        to_timestamp("timestamp")
+    )
 
-avg_price_df = parsed_df.groupBy("furniture").agg(avg("price").alias("avg_price"))
+    # Calculate running totals with minute window
+    window_agg = parsed_df \
+        .withWatermark("event_timestamp", "1 minute") \
+        .groupBy(
+            window("event_timestamp", "1 minute")
+        ) \
+        .agg(
+            sum("price").alias("total_amount"),
+            count("*").alias("number_of_transactions"),
+            round(avg("price"), 2).alias("average_price")
+        ) \
+        .select(
+            col("window.start").alias("window_start"),
+            col("window.end").alias("window_end"),
+            col("total_amount"),
+            col("number_of_transactions"),
+            col("average_price")
+        )
 
-# Write the result to the console
-query = avg_price_df.writeStream.outputMode("update").format("console").trigger(processingTime="10 seconds").start()
+    # Write to console
+    query = window_agg \
+        .writeStream \
+        .outputMode("complete") \
+        .format("console") \
+        .option("truncate", "false") \
+        .trigger(processingTime="10 seconds") \
+        .start()
 
-query.awaitTermination()
+    query.awaitTermination()
 
-# Batch 1
-# chair 10
-# desk 10
-# bed 20
-# chair 20
-
-# Avg
-# Chair 15
-# desk 10
-# bed 20
-
-# Batch 2
-# chair 30
-
-# Avg Complete
-# Chair 20
-# desk 10
-# bed 20
-
-# Avg Update
-# Chair 20
+if __name__ == "__main__":
+    print("Starting Spark Streaming Consumer...")
+    process_stream()

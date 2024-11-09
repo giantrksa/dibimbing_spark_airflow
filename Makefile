@@ -76,7 +76,10 @@ spark:
 	@echo '__________________________________________________________'
 	@echo 'Creating Spark Cluster ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-spark.yml --env-file .env up -d
+	@docker-compose -f ./docker/docker-compose-spark.yml --env-file .env down
+	@docker-compose -f ./docker/docker-compose-spark.yml --env-file .env up -d
+	@echo 'Waiting for Spark cluster to be ready...'
+	@sleep 30
 	@echo '==========================================================='
 
 spark-submit-test:
@@ -141,7 +144,7 @@ kafka-create:
 	@echo '__________________________________________________________'
 	@echo 'Creating Kafka Cluster ...'
 	@echo '__________________________________________________________'
-	@docker compose -f ./docker/docker-compose-kafka.yml --env-file .env up -d
+	@docker-compose -f ./docker/docker-compose-kafka.yml --env-file .env up -d
 	@echo 'Waiting for uptime on http://localhost:8083 ...'
 	@sleep 20
 	@echo '==========================================================='
@@ -166,7 +169,8 @@ spark-produce:
 	@echo '__________________________________________________________'
 	@echo 'Producing fake events ...'
 	@echo '__________________________________________________________'
-	@docker exec ${SPARK_WORKER_CONTAINER_NAME}-1 \
+	@echo 'Running producer script...'
+	@docker exec -e PYTHONUNBUFFERED=1 ${SPARK_WORKER_CONTAINER_NAME}-1 \
 		python \
 		/scripts/event_producer.py
 
@@ -198,6 +202,35 @@ metabase: postgres-create-warehouse
 	@echo '__________________________________________________________'
 	@docker compose -f ./docker/docker-compose-metabase.yml --env-file .env up
 	@echo '==========================================================='
+
+# Add this new command to your Makefile
+start-all: clean kafka-setup spark-setup consumer-producer
+
+# Add these supporting commands
+kafka-setup:
+	@echo '__________________________________________________________'
+	@echo 'Setting up Kafka...'
+	@echo '__________________________________________________________'
+	@make kafka
+	@sleep 20
+	@make kafka-create-test-topic
+	@echo 'Kafka setup complete'
+
+spark-setup:
+	@echo '__________________________________________________________'
+	@echo 'Setting up Spark...'
+	@echo '__________________________________________________________'
+	@make spark
+	@sleep 30
+	@echo 'Spark setup complete'
+
+consumer-producer:
+	@echo '__________________________________________________________'
+	@echo 'Starting consumer and producer...'
+	@echo '__________________________________________________________'
+	@make spark-consume & \
+	sleep 5 && \
+	make spark-produce
 
 clean:
 	@bash ./scripts/goodnight.sh
